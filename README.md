@@ -162,6 +162,12 @@
 > showfat   n   显示n行FAT数据，每行10个
 
 
+## showopen
+
+**显示当前已打开文件的信息**
+
+> showopen   直接使用即可
+
 
 ## show
 

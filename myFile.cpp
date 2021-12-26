@@ -10,7 +10,8 @@ void mget(char filename[DIRNUM]){
 int main(){
     string order;
     startsys();
-    cout<<username<<":"<<currentdir<<"$ ";
+    cout<<BOLDMAGENTA<<username<<RESET<<":"<<BOLDBLUE<<currentdir<<BOLDYELLOW<<"$ "<<RESET;
+    // cout<<username<<":"<<currentdir<<"$ ";
     while(cin>>order){
         char filename[DIRNUM];
         int fd;
@@ -28,7 +29,6 @@ int main(){
         }
         else if(order=="rmdir"){
             mget(filename);
-            cout<<filename<<endl;
             my_rmdir(filename);
         }
         else if(order=="ls"){
@@ -41,20 +41,37 @@ int main(){
         else if(order=="open"){
             mget(filename);
             int t=my_open(filename);
-            cout<<t<<endl;
+            if(t!=-1){
+                cout<<"Index:"<<t<<endl;
+            }
         }
         else if(order=="close"){
-            cin>>fd;
+            char ch;
+            int co=0;
+            fd=curfileorder;           
+            while(1){
+                int t=0;
+                while((ch=getchar())==' ');
+                if(ch=='\n')break;
+                while(ch!='\n' &&  ch!=' '){
+                    t=(t<<1)+(t<<3)+(ch^48);
+                    ch=getchar();
+                }
+                if(co==0) fd=t;
+                co++;
+                if(ch=='\n' || co>=1)break;
+            }
             my_close(fd);
         }
         else if(order=="write"){
             char ch;
             unsigned int offset=0;
             int co=0,type=0;
-            fd=0;
+            fd=curfileorder;           
             while(1){
                 int t=0;
                 while((ch=getchar())==' ');
+                if(ch=='\n')break;
                 while(ch!='\n' &&  ch!=' '){
                     t=(t<<1)+(t<<3)+(ch^48);
                     ch=getchar();
@@ -75,10 +92,11 @@ int main(){
             char ch;
             unsigned int offset=0;
             int co=0 ,len=0;
-            fd=0;
+            fd=curfileorder;
             while(1){
                 int t=0;
                 while((ch=getchar())==' ');
+                if(ch=='\n')break;
                 while(ch!='\n' &&  ch!=' '){
                     t=(t<<1)+(t<<3)+(ch^48);
                     ch=getchar();
@@ -94,7 +112,7 @@ int main(){
         else if(order=="showfat"){
             char ch;
             int co = 0;
-            fd = 5;
+            fd = 7;
             while(1){
                 int t=0;
                 while((ch=getchar())==' ');
@@ -120,7 +138,14 @@ int main(){
             cin>>oldname>>newname;
             my_cname(curdir,oldname,newname,1);
         }
-        cout<<username<<":"<<currentdir<<"$ ";
+        else if(order=="hh"){
+            cout<<curfileorder<<endl;
+        }
+        else{
+            cout<<"Command \'"<<order<<"\' not found"<<endl;
+        }
+        cout<<BOLDMAGENTA<<username<<RESET<<":"<<BOLDBLUE<<currentdir<<BOLDYELLOW<<"$ "<<RESET;
+        // cout<<username<<":"<<currentdir<<"$ ";
     }
     my_exitsys();
     return 0;

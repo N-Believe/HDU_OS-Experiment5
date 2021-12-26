@@ -32,7 +32,7 @@ using namespace std;
 #define BOLDWHITE   "\033[1m\033[37m"  
 
 
-#define BLOCKSIZE 40    //磁盘块大小
+#define BLOCKSIZE 64    //磁盘块大小
 #define END 65535       //FAT中的文件结束标志
 #define FREE 0          //FAT中盘块空闲标志
 #define MAXOPENFILE 10  //最多同时打开文件个数

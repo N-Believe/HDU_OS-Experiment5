@@ -186,7 +186,7 @@ void delDiritem(unsigned short fd,string str1,int type){
         curdirlastnum0=Fat1[curdirlastnum0].id;
     }
     curdirtaken0=length;
-    if(curdirtaken0<sizeof(fcb)){
+    if(curdirtaken0<=sizeof(fcb)){
         unsigned short tempnum = curdirlastnum0;
         curdirlastnum0 = findpre(curdirlastnum0);         
         pre = sizeof(fcb)-curdirtaken0;

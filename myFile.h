@@ -9,27 +9,43 @@
 #include<vector>
 #include<iomanip>
 #include<cmath>
+#include<bitset>
 using namespace std;
 
-#define BLOCKSIZE 1024    //磁盘块大小
-// #define SIZE 64000    //磁盘虚拟空间大小
+//修改输出颜色
+#define RESET   "\033[0m"
+#define BLACK   "\033[30m"
+#define RED     "\033[31m"  
+#define GREEN   "\033[32m"
+#define YELLOW  "\033[33m" 
+#define BLUE    "\033[34m"  
+#define MAGENTA "\033[35m" 
+#define CYAN    "\033[36m"  
+#define WHITE   "\033[37m"  
+#define BOLDBLACK   "\033[1m\033[30m" 
+#define BOLDRED     "\033[1m\033[31m" 
+#define BOLDGREEN   "\033[1m\033[32m"
+#define BOLDYELLOW  "\033[1m\033[33m" 
+#define BOLDBLUE    "\033[1m\033[34m" 
+#define BOLDMAGENTA "\033[1m\033[35m"  
+#define BOLDCYAN    "\033[1m\033[36m" 
+#define BOLDWHITE   "\033[1m\033[37m"  
+
+
+#define BLOCKSIZE 64    //磁盘块大小
 #define END 65535       //FAT中的文件结束标志
 #define FREE 0          //FAT中盘块空闲标志
-#define ROOTBLOCKNUM 2  //根目录初始所占盘块总数
 #define MAXOPENFILE 10  //最多同时打开文件个数
 #define BLOCKNUM 1000
 #define DIRNUM 80 //目录路径普遍长度范围
-#define SIZE  (BLOCKSIZE*BLOCKNUM)
+#define SIZE  (BLOCKSIZE*BLOCKNUM) //磁盘虚拟空间大小
 
 typedef struct FCB{
     char filename[8]; // 文件名
     char exname[3];     //文件扩展名
     unsigned char attribute; //文件属性字段, 0: 目录文件  1: 数据文件
-    unsigned short time;    //文件创建时间
-    unsigned short date;    //文件创建日期
     unsigned short first; //文件起始盘块号
     unsigned int length; //文件长度(字节数)
-    char free; // 表示目录项是否为空,若值为0,则表示为空;值为1,表示已分配
 }fcb;
 
 typedef struct FAT {
@@ -39,17 +55,17 @@ typedef struct FAT {
 typedef struct USEROPEN {
     fcb file_fcb;
     char dir[DIRNUM]; // 打开文件所在路径,以便快速检查指定文件是否已经打开
-    int count;  //读写指针的位置
-    char fcbstate; //文件的PCB是否被修改,如果修改了,则置为1;否则,置为0
     char topenfile; //打开表项是否为空, 0:空  1:表示已被占用 
 } useropen;
 
 typedef struct BLOCK0 {
-    char information[200]; //存储一些描述信息,如磁盘大小,磁盘块数量等
+    char information[BLOCKSIZE-10]; //存储一些描述信息,如磁盘大小,磁盘块数量等
     unsigned short root;    //根目录文件的起始盘块号
     unsigned char *startblock;  //虚拟磁盘上数据区开始位置
 } block0;
 
+
+const int fatnum = ceil((double)2*BLOCKNUM/BLOCKSIZE);
 int curfileorder = -1; //记录当前打开的文件表在文件表数组中的序号
 unsigned short openfileindex[MAXOPENFILE];//记录打开的文件的目录项所在磁盘块
 const char username[] = "ZhengLi";
@@ -58,7 +74,7 @@ useropen openfiles[MAXOPENFILE];//用户打开的文件表数组
 unsigned short curdir; //当前目录的文件描述符
 unsigned short curdirlastnum; //当前目录的最后所在盘块号
 unsigned int curdirtaken; //当前目录在磁盘上的已占用的空间
-char currentdir[80]; //记录当前目录的目录名(包括目录的路径)
+char currentdir[DIRNUM]; //记录当前目录的目录名(包括目录的路径)
 unsigned char *startp; //记录虚拟磁盘上数据区开始的位置
 unsigned char *blockaddr[BLOCKNUM];
 fat Fat1[BLOCKNUM],Fat2[BLOCKNUM];
@@ -90,25 +106,26 @@ unsigned short findpre(unsigned short x);
 
 bool addDiritem(unsigned short fd,string str,int type){
     fcb first_fcb,second_fcb,temp;
+    memset(&temp,0,sizeof(temp));
     unsigned char* tempblock;
     unsigned int length;
     unsigned int curdirtaken0=0;
     unsigned short curdirlastnum0=fd;
-    checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);  
-    vector<unsigned short> vt = findfree();
-    if(vt.size()==0)return false;
-    unsigned short t=vt[0];
-    Fat1[t].id = END;
-    fcb_init(&temp,(char*)str.c_str(),t,type);
-    if(type==0)//如果是目录,就需要初始化第一块
-        block_init(t,fd);
-    my_modifylen(fd,sizeof(fcb),1);
+    checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);   
     while(length>BLOCKSIZE){
         length-=BLOCKSIZE;
         curdirlastnum0=Fat1[curdirlastnum0].id;
     }
     curdirtaken0=length;
+    fcb_init(&temp,(char*)str.c_str(),0,type);
+    my_modifylen(fd,sizeof(fcb),1);
+    unsigned short t;
     if(BLOCKSIZE-sizeof(fcb)>=curdirtaken0){
+        vector<unsigned short> vt = findfree();
+        if(vt.size()==0)return false;
+        t=vt[0];
+        Fat1[t].id = END;
+        temp.first = t;
         memcpy(blockaddr[curdirlastnum0]+curdirtaken0,&temp,sizeof(fcb));
         if(fd==curdir)curdirtaken+=sizeof(fcb);
     }
@@ -120,11 +137,21 @@ bool addDiritem(unsigned short fd,string str,int type){
         unsigned int last = sizeof(fcb)-prev;
         Fat1[curdirlastnum0].id = newblock;
         Fat1[newblock].id = END;
-        memcpy(blockaddr[curdirlastnum0]+curdirtaken0,&temp,prev);
-        memcpy(blockaddr[newblock],&temp+prev,last);
+        vector<unsigned short> vt = findfree();
+        if(vt.size()==0)return false;
+        t=vt[0];
+        Fat1[t].id = END;
+        temp.first = t;
+        unsigned char* save = (unsigned char*)malloc(sizeof(fcb));
+        memcpy(save,&temp,sizeof(fcb));
+
+        memcpy(blockaddr[curdirlastnum0]+curdirtaken0,save,prev);
+        memcpy(blockaddr[newblock],save+prev,last);
         if(fd==curdir)curdirlastnum = newblock;
         if(fd==curdir)curdirtaken = last;
     }
+    if(type==0)//如果是目录,就需要初始化第一块
+        block_init(t,fd);
     return true;
 }
 
@@ -140,8 +167,8 @@ void delDiritem(unsigned short fd,string str1,int type){
     for(j=0;j*sizeof(fcb)<(int)length;j++){
         memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
         string str = temp.filename;
-        if(temp.attribute!=type)continue;
-        if(temp.attribute==1){
+        if((int)temp.attribute!=type)continue;
+        if((int)temp.attribute==1){
             if(strlen(temp.exname)!=0){
                 str+='.';
                 str+=temp.exname;
@@ -152,6 +179,8 @@ void delDiritem(unsigned short fd,string str1,int type){
             break;
         }
     }
+    bool over = false;
+    if((j+1)*sizeof(fcb)==length)over=true;
     while(length>BLOCKSIZE){
         length-=BLOCKSIZE;
         curdirlastnum0=Fat1[curdirlastnum0].id;
@@ -162,8 +191,13 @@ void delDiritem(unsigned short fd,string str1,int type){
         curdirlastnum0 = findpre(curdirlastnum0);         
         pre = sizeof(fcb)-curdirtaken0;
         left = curdirtaken0;
-        memcpy(&temp,blockaddr[curdirlastnum0]+(BLOCKSIZE-pre),pre);
-        memcpy(&temp+pre,blockaddr[tempnum],left);
+        
+        unsigned char* save = (unsigned char*)malloc(sizeof(fcb));
+        memcpy(save,&temp,sizeof(fcb));
+
+        memcpy(save,blockaddr[curdirlastnum0]+(BLOCKSIZE-pre),pre);
+        memcpy(save+pre,blockaddr[tempnum],left);
+        memcpy(&temp,save,sizeof(fcb));
         curdirtaken0 = BLOCKSIZE-pre;
         Fat1[tempnum].id = FREE;
         Fat1[curdirlastnum0].id = END;
@@ -173,7 +207,8 @@ void delDiritem(unsigned short fd,string str1,int type){
         curdirtaken0-=sizeof(fcb);
     }
     my_modifylen(fd,sizeof(fcb),-1);
-
+    if(over)return;
+    
     int count0 = j*sizeof(fcb)/BLOCKSIZE;
     int offset = j*sizeof(fcb)%BLOCKSIZE;
     cn=fd;
@@ -187,9 +222,12 @@ void delDiritem(unsigned short fd,string str1,int type){
     else{
         pre = BLOCKSIZE-offset;
         left = sizeof(fcb)-pre;
-        memcpy(blockaddr[cn]+offset,&temp,pre);
+        unsigned char* save = (unsigned char*)malloc(sizeof(fcb));
+        memcpy(save,&temp,sizeof(fcb));
+
+        memcpy(blockaddr[cn]+offset,save,pre);
         cn = Fat1[cn].id;
-        memcpy(blockaddr[cn],&temp+pre,left);
+        memcpy(blockaddr[cn],save+pre,left);
     }
     if(curdir == fd){
         curdirlastnum = curdirlastnum0;
@@ -209,7 +247,7 @@ void StrtocharArray(string s,char temp[DIRNUM]){
 vector<unsigned short> findfree(int num){
     vector<unsigned short> v;
     int co=0;
-    for(unsigned short i=6;i<BLOCKNUM;i++){
+    for(unsigned short i=2*fatnum+2;i<BLOCKNUM;i++){
         if(Fat1[i].id==FREE){
             v.push_back(i);
             co++;
@@ -221,7 +259,7 @@ vector<unsigned short> findfree(int num){
 
 //查找前一个盘块
 unsigned short findpre(unsigned short x){
-    for(unsigned short i = 5;i<BLOCKNUM;i++){
+    for(unsigned short i = 2*fatnum+1;i<BLOCKNUM;i++){
         if(Fat1[i].id == x)return i;
     }
     return bootdisk.root;
@@ -232,20 +270,31 @@ void rmdirall(unsigned short fd){
     fcb first_fcb,second_fcb;
     unsigned char* tempblock;
     unsigned int length;
-    checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);        
+    checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);    
     for(int i=2;i*sizeof(fcb)<length;i++){
         fcb temp;
         memcpy(&temp,tempblock+i*sizeof(fcb),sizeof(fcb));
-        if(temp.attribute == 0){
+        if((int)temp.attribute == 0){
             rmdirall(temp.first);
             continue;
         }
+        int ha = -1;
         unsigned short cn=temp.first,cnn=cn;
+        for(int kk=0;kk<MAXOPENFILE;kk++){
+            useropen &cn = openfiles[kk];
+            if(!strcmp(cn.file_fcb.filename,temp.filename) && !strcmp(cn.file_fcb.exname,temp.exname)){
+                cn.topenfile=0;
+                curfileorder=-1;
+            }
+            if(cn.topenfile==1 && ha==-1)ha=kk;
+        }
+        if(curfileorder == -1)
+            curfileorder = ha;
         while(1){
             if(Fat1[cn].id!=END){
+                cn=Fat1[cn].id;
                 Fat1[cnn].id=FREE;
                 cnn = cn;
-                cn=Fat1[cn].id;
             }
             else{
                 Fat1[cn].id = FREE;
@@ -256,9 +305,9 @@ void rmdirall(unsigned short fd){
     unsigned short cn=fd,cnn=cn;
     while(1){
         if(Fat1[cn].id!=END){
+            cn=Fat1[cn].id;
             Fat1[cnn].id=FREE;
             cnn = cn;
-            cn=Fat1[cn].id;
         }
         else{
             Fat1[cn].id = FREE;
@@ -269,13 +318,20 @@ void rmdirall(unsigned short fd){
 
 void show_fat(int fd){
     fd = min(fd,(int)BLOCKNUM/10);
+    int line=0;
+    cout<<"      ";
     for(int i=0;i<10;i++){
         cout<<setw(8)<<left<<i;
     }
     cout<<endl;
-    cout<<"-------------------------------------------------------------------------------"<<endl;
+    cout<<"------------------------------------------------------------------------------------"<<endl;
+    cout<<setw(5)<<left<<dec<<line<<right<<"|";
     for(int i=0;i<fd*10;i++){
-        if(i%10==0 && i!=0)cout<<endl;
+        if(i%10==0 && i!=0){
+            cout<<endl;
+            line+=10;
+            cout<<setw(5)<<left<<dec<<line<<right<<"|";
+        }
         cout<<"0x"<<setw(6)<<left<<hex<<Fat1[i].id;
     }
     cout<<endl;
@@ -308,9 +364,9 @@ void startsys(){
         memcpy(myvhard,buf,SIZE);
         memcpy(&bootdisk,blockaddr[0],sizeof(bootdisk));
         memcpy(Fat1,blockaddr[1],2*BLOCKNUM);
-        memcpy(Fat2,blockaddr[3],2*BLOCKNUM);
-        curdir = 5;
-        bootdisk.root = 5;
+        memcpy(Fat2,blockaddr[1+fatnum],2*BLOCKNUM);
+        curdir = 2*fatnum+1;
+        bootdisk.root = 2*fatnum+1;
         curfileorder = 0;
         free(buf);
         curdirlastnum = curdir;
@@ -329,7 +385,7 @@ void startsys(){
     if(fp!=NULL)fclose(fp);
 }
 
-//当删除文件、目录或者创建目录、文件后,修改pcb中的length
+//当删除文件、目录或者创建目录、文件后,修改fcb中的length
 void my_modifylen(unsigned short fd,unsigned short del,int mode){
     fcb first_fcb,second_fcb;
     unsigned char* tempblock;
@@ -340,7 +396,7 @@ void my_modifylen(unsigned short fd,unsigned short del,int mode){
     }
     else first_fcb.length+=del;
     memcpy(blockaddr[fd],&first_fcb,sizeof(fcb));
-    if(second_fcb.first == first_fcb.first){
+    if(second_fcb.first == fd){
         if(mode==-1){
             second_fcb.length-=del;
         }
@@ -353,21 +409,25 @@ void my_modifylen(unsigned short fd,unsigned short del,int mode){
         fcb temp;
         int count0=1;
         memcpy(&temp,blockaddr[parent],sizeof(fcb));
+        unsigned char* save = (unsigned char*)malloc(sizeof(fcb));
+        memcpy(save,&temp,sizeof(fcb));
         unsigned int len = temp.length,pre,left;
         for(int i=2;i*sizeof(fcb)<len;i++){
             if(i*sizeof(fcb)>count0*BLOCKSIZE){
                 left = i*sizeof(fcb)%BLOCKSIZE;
                 pre = sizeof(fcb)-left;
-                memcpy(&temp,blockaddr[parent]+(BLOCKSIZE-pre),pre);
+                memcpy(save,blockaddr[parent]+(BLOCKSIZE-pre),pre);
                 cn = Fat1[parent].id;
-                memcpy(&temp+pre,blockaddr[cn],left);
+                memcpy(save+pre,blockaddr[cn],left);
+                memcpy(&temp,save,sizeof(fcb));
                 if(temp.first==fd){
                     if(mode==-1){
                         temp.length-=del;
                     }
                     else temp.length+=del;
-                    memcpy(blockaddr[parent]+(BLOCKSIZE-pre),&temp,pre);
-                    memcpy(blockaddr[cn],&temp+pre,left);
+                    memcpy(save,&temp,sizeof(fcb));
+                    memcpy(blockaddr[parent]+(BLOCKSIZE-pre),save,pre);
+                    memcpy(blockaddr[cn],save+pre,left);
                     break;
                 }
                 else{
@@ -400,7 +460,7 @@ void block_init(unsigned short self, unsigned short parent){
 }
 
 void fcb_init(fcb *new_fcb, const char* filename, unsigned short first, unsigned char attribute) {
-    if(attribute==1){
+    if((int)attribute==1){
         int i;
         for(i=strlen(filename)-1;i>0;i--){
             if(filename[i]=='.')break;
@@ -420,38 +480,43 @@ void fcb_init(fcb *new_fcb, const char* filename, unsigned short first, unsigned
             strcpy(new_fcb->exname, ch);
         }
     }
-    else strcpy(new_fcb->filename, filename);
+    else{
+        strcpy(new_fcb->filename, filename);
+        new_fcb->exname[0]='\0';
+    }
     new_fcb->first = first;
     new_fcb->attribute = attribute;
-    new_fcb->free = 0;
-    if (attribute) new_fcb->length = 0;
+    if ((int)attribute) new_fcb->length = 0;
     else new_fcb->length = 2*sizeof(fcb);
 }
 
 //格式化
 void my_format(){
     strcpy(bootdisk.information,"ZhengLi");
-    bootdisk.root = 5;
-    bootdisk.startblock = blockaddr[5];
-    for(int i=0;i<5;i++){
+    bootdisk.root = 2*fatnum+1;
+    bootdisk.startblock = blockaddr[2*fatnum+1];
+    for(int i=0;i<2*fatnum+1;i++){
         Fat1[i].id = END;
     }
-    for(int i=5;i<BLOCKNUM;i++){
+    for(int i=2*fatnum+1;i<BLOCKNUM;i++){
         Fat1[i].id = FREE;
     }
     for(int i=0;i<BLOCKNUM;i++){
         Fat2[i].id = Fat1[i].id;
     }
-    Fat1[5].id = END;
+    for(int i=0;i<MAXOPENFILE;i++){
+        openfiles[i].topenfile=0;
+    }
+    Fat1[2*fatnum+1].id = END;
     fcb first_diritem,second_diritem;
-    fcb_init(&first_diritem,".",5,0);
-    fcb_init(&second_diritem,"..",5,0);
-    memcpy(blockaddr[5],&first_diritem,sizeof(fcb));
-    memcpy(blockaddr[5]+sizeof(fcb),&second_diritem,sizeof(fcb));
-    memcpy(blockaddr[1],Fat1,2*BLOCKNUM);
-    memcpy(blockaddr[3],Fat2,2*BLOCKNUM);
+    fcb_init(&first_diritem,".",2*fatnum+1,0);
+    fcb_init(&second_diritem,"..",2*fatnum+1,0);
+    memcpy(blockaddr[2*fatnum+1],&first_diritem,sizeof(fcb));
+    memcpy(blockaddr[2*fatnum+1]+sizeof(fcb),&second_diritem,sizeof(fcb));
+    memcpy(blockaddr[1],Fat1,sizeof(fat)*BLOCKNUM);
+    memcpy(blockaddr[1+fatnum],Fat2,sizeof(fat)*BLOCKNUM);
     memcpy(blockaddr[0],&bootdisk,BLOCKSIZE);
-    curdir = 5;
+    curdir = 2*fatnum+1;
     strcpy(currentdir,"~");
     curdirlastnum = curdir;
     curdirtaken = first_diritem.length;
@@ -461,6 +526,7 @@ void my_format(){
 //找到某个目录的所有目录项/某个文件的所有内容
 void checkDir(unsigned char** tempblock,unsigned short fd,unsigned int &length,fcb *first_fcb,fcb *second_fcb){
     memcpy(first_fcb,blockaddr[fd],sizeof(fcb));
+    memcpy(second_fcb,blockaddr[fd]+sizeof(fcb),sizeof(fcb));
     *tempblock = (unsigned char*)malloc(first_fcb->length);
     int lenleft = first_fcb->length;
     length = first_fcb->length;
@@ -473,7 +539,6 @@ void checkDir(unsigned char** tempblock,unsigned short fd,unsigned int &length,f
         tempfd2 = Fat1[tempfd2].id;
         lenleft -= BLOCKSIZE;
     }
-    memcpy(second_fcb,blockaddr[fd]+sizeof(fcb),sizeof(fcb));
 }
 
 
@@ -482,7 +547,7 @@ void checkDir(unsigned char** tempblock,unsigned short fd,unsigned int &length,f
 vector<string> splitFilePath(char *filename,int &mode,const char* del){
     char cn[DIRNUM],cn2[DIRNUM];
     int len = strlen(filename);
-    if(filename[0]=='\"' && filename[strlen(filename)-1]=='\"'){
+    if(filename[0]=='\"' && filename[strlen(filename)-1]=='\"' || filename[0]=='\'' && filename[strlen(filename)-1]=='\''){
         strncpy(cn,filename+1,len-2);
         cn[len-2]='\0';
     }
@@ -508,8 +573,23 @@ vector<string> splitFilePath(char *filename,int &mode,const char* del){
 int my_open(char *filename){
     int mode;
     unsigned short fd;
-    vector<string> v ,name;
-    v = splitFilePath(filename,mode);
+    vector<string>v,name,he;// he存的是各个文件, v存的是当前操作的文件的各级目录
+    if(filename[0]=='\"' && filename[strlen(filename)-1]=='\"' || filename[0]=='\'' && filename[strlen(filename)-1]=='\''){
+        v.push_back(((string)filename).substr(1,strlen(filename)-2));
+        filename = (char*)v[0].c_str();
+        v = splitFilePath(filename,mode);
+    }
+    else{
+        string tempstr = filename;
+        he = splitFilePath(filename,mode," ");
+        if(he.size()==0){
+            cout<<"wrong"<<endl;
+            return -1;
+        }
+        else if(he.size()==1){
+            v = splitFilePath((char*)tempstr.c_str(),mode);
+        }
+    }
     name.push_back("~");
     if(mode==1){
         fd = curdir;
@@ -535,36 +615,46 @@ int my_open(char *filename){
     checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
     for(int i=0;i<v.size();i++){
         bool mark = false;
-        for(int j=0;j*sizeof(fcb)<length;j++){
-            memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
-            string str  = temp.filename;
-            if(i==v.size()-1 && temp.attribute==0)continue;
-            if(i<v.size()-1 && temp.attribute==1)continue;
-            if(temp.attribute==1){
-                str+=".";
-                str+=(string)temp.exname;
+        if(v[i]=="."){
+            if(i!=v.size()-1)
+                continue;
+            else{
+                mark=1;
             }
-            if(v[i]==".")continue;
-            if(v[i]==".."){
-                if(second_fcb.first == curdir)
-                    break;
-                fd = second_fcb.first;
-                checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
-                mark = true;
-                name.pop_back();
-                break;
-            }
-            else if(str==v[i]){
-                if(temp.attribute==0){
-                    fd = temp.first;
+        }
+        else{
+            for(int j=0;j*sizeof(fcb)<length;j++){
+                memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
+                string str  = temp.filename;
+                if(i==v.size()-1 && (int)temp.attribute==0)continue;
+                if(i<v.size()-1 && (int)temp.attribute==1)continue;
+                if((int)temp.attribute==1){
+                    if(strlen(temp.exname)!=0){
+                        str+=".";
+                        str+=(string)temp.exname;
+                    }
+                }  
+                if(v[i]==".."){
+                    if(second_fcb.first == fd)
+                        break;
+                    fd = second_fcb.first;
                     checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
-                    mark = true;
-                    name.push_back(v[i]);
+                    name.pop_back();
+                    mark=true;
                     break;
-                }
-                else if(i==v.size()-1){
-                    mark = true;
-                    break;     
+                }   
+                if(str==v[i]){
+                    if((int)temp.attribute==0){
+                        fd = temp.first;
+                        checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
+                        mark = true;
+                        name.push_back(v[i]);
+                        break;
+                    }
+                    else if(i==v.size()-1){
+                        mark = true;
+                        break;     
+                    }
                 }
             }
         }
@@ -609,8 +699,6 @@ int my_open(char *filename){
             else{
                 StrtocharArray(haha,openfiles[firstempty].dir);
                 openfiles[firstempty].file_fcb = temp;
-                openfiles[firstempty].count = 0;
-                openfiles[firstempty].fcbstate = 0;
                 openfiles[firstempty].topenfile = 1;
                 curfileorder = firstempty;
                 openfileindex[firstempty]=fd;
@@ -619,6 +707,7 @@ int my_open(char *filename){
         }
     }
     free(tempblock);
+    cout<<"The specified file does not exist"<<endl;
     return -1;
 }
 
@@ -631,11 +720,9 @@ int my_write(int index,unsigned int offset,int type){
     char ch[SIZE];
     while(fgets(ch,SIZE,stdin)){
         s+=ch;
-        s+='\n';
     }
     if(s.size())s.pop_back();
     useropen &cn = openfiles[index];
-
 
     //修改目录项
     int mode;
@@ -643,9 +730,9 @@ int my_write(int index,unsigned int offset,int type){
     fcb first_fcb,second_fcb;
     fcb temp;
     unsigned char* tempblock;
-    unsigned int length;
+    unsigned int length,templen,need=0,beginLen;
     checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);    
-
+    beginLen = (length+BLOCKSIZE-1)/BLOCKSIZE;
     int i;
     for(i=2;i*sizeof(fcb)<length;i++){
         memcpy(&temp,tempblock+i*sizeof(fcb),sizeof(fcb));
@@ -654,18 +741,25 @@ int my_write(int index,unsigned int offset,int type){
             break;
         }
     }
-    int offset2 = i*sizeof(fcb), myoff = 0;
-    while(offset2>=BLOCKSIZE){
+    int offset2 = i*sizeof(fcb), myoff = 0 ,offset3;
+    while(offset2>BLOCKSIZE){
         offset2-=BLOCKSIZE;
         fd=Fat1[fd].id;
-    }    
+    }   
+    offset=min((unsigned int)offset,temp.length); 
     if(type==0){
-        temp.length = offset;
+        temp.length = min(temp.length,offset);
+        templen = temp.length;
+        temp.length+=s.size();
+        offset3 = offset;
     }
-    else offset=min((unsigned int)offset,cn.file_fcb.length);
-    cout<<"tmplen:"<<temp.length<<"  se:"<<s.size()<<endl;
-    temp.length+=s.size();
+    else if(type==1){
+        templen = temp.length;
+        temp.length = max(temp.length,(unsigned int)(offset+s.size()));
+        offset3 = min(templen,(unsigned int)(offset+s.size()));
+    }
     cn.file_fcb.length=temp.length;
+    
     if(BLOCKSIZE-offset2>=sizeof(fcb)){
         memcpy(blockaddr[fd]+offset2,&temp,sizeof(fcb));
     }
@@ -673,17 +767,16 @@ int my_write(int index,unsigned int offset,int type){
         unsigned short pre , left;
         pre = BLOCKSIZE-offset2;
         left = sizeof(fcb)-pre;
-        memcpy(blockaddr[fd]+offset2,&temp,pre);
+        unsigned char* save = (unsigned char*)malloc(sizeof(fcb));
+        memcpy(save,&temp,sizeof(fcb));
+        memcpy(blockaddr[fd]+offset2,save,pre);
         fd = Fat1[fd].id;
-        memcpy(blockaddr[fd],&temp+pre,left);
+        memcpy(blockaddr[fd],save+pre,left);
     }
-    cn.fcbstate=1;
-
     //写入
     fd = cn.file_fcb.first;
-    offset2 = cn.file_fcb.length%BLOCKSIZE;
-    if(BLOCKSIZE-offset2<s.size()){
-        int num = (s.size()+offset2-BLOCKSIZE)/BLOCKSIZE;
+    if(beginLen<temp.length || beginLen-temp.length<s.size()){
+        int num = (int)(beginLen-temp.length+BLOCKSIZE-1)/BLOCKSIZE;
         vector<unsigned short>blocka = findfree(num);
         if(blocka.size()<num){
             cout<<"Insufficient memory, write failed"<<endl;
@@ -706,13 +799,14 @@ int my_write(int index,unsigned int offset,int type){
     while(length>BLOCKSIZE){
         memcpy(tempblock+myoff*BLOCKSIZE,blockaddr[fd2],BLOCKSIZE);
         length-=BLOCKSIZE;
+        myoff++;
         fd2=Fat1[fd2].id;
     }
     memcpy(tempblock+myoff*BLOCKSIZE,blockaddr[fd2],length);
     fd2 = fd;
     length = cn.file_fcb.length;
     offset2 = offset;
-    while(offset>=BLOCKSIZE){
+    while(offset>BLOCKSIZE){
         offset-=BLOCKSIZE;
         fd2=Fat1[fd2].id;
     }
@@ -730,24 +824,41 @@ int my_write(int index,unsigned int offset,int type){
         myoff+=co;
         fd2=Fat1[fd2].id;
     }
-    cn.count = offset2+s.size();
-    if(offset==BLOCKSIZE){
+    if(offset==BLOCKSIZE && Fat1[fd2].id!=END){
         offset=0;
         fd2=Fat1[fd2].id;
     }
     myoff=0;
-    while(offset2<length){
-        int co = min(BLOCKSIZE-offset,length-offset2);
-        memcpy(blockaddr[fd2]+offset,tempblock+offset2,co);
-        if(co==length-offset2){
+    while(offset3<templen){
+        int co = min(BLOCKSIZE-offset,templen-offset3);
+        memcpy(blockaddr[fd2]+offset,tempblock+offset3,co);
+        if(co==templen-offset3){
             offset+=co;
             break;
         }
         offset=0;
-        offset2+=co;
+        offset3+=co;
         fd2=Fat1[fd2].id;            
     }
-    free(tempblock);
+    unsigned short cnn=fd2;
+    if(Fat1[fd2].id!=END){
+        cnn=fd2;
+        fd2=Fat1[fd2].id;
+        Fat1[cnn].id=END;
+        cnn=fd2;
+        while(1){
+            if(Fat1[fd2].id!=END){
+                fd2=Fat1[fd2].id;
+                Fat1[cnn].id=FREE;
+                cnn = fd2;
+            }
+            else{
+                Fat1[fd2].id=FREE;
+                break;
+            }
+        }
+    }
+    if(tempblock!=NULL)free(tempblock);
     curfileorder = index;
     return 0;
 }
@@ -756,8 +867,10 @@ int my_create(char *filename){
     int mode;
     unsigned short fd;
     vector<string>v,name,he;// he存的是各个文件, v存的是当前操作的文件的各级目录
-    if(filename[0]=='\"' && filename[strlen(filename)-1]=='\"'){
+    if(filename[0]=='\"' && filename[strlen(filename)-1]=='\"' || filename[0]=='\'' && filename[strlen(filename)-1]=='\''){
         v.push_back(((string)filename).substr(1,strlen(filename)-2));
+        filename = (char*)v[0].c_str();
+        v = splitFilePath(filename,mode);
     }
     else{
         string tempstr = filename;
@@ -768,9 +881,6 @@ int my_create(char *filename){
         }
         else if(he.size()==1){
             v = splitFilePath((char*)tempstr.c_str(),mode);
-            for(int i=0;i<v.size();i++){
-                if(v[i][0]=='/')v[i]=v[i].substr(1);
-            }
         }
         else{
             for(int i=0;i<he.size();i++){
@@ -804,31 +914,47 @@ int my_create(char *filename){
     checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
     for(int i=0;i<v.size();i++){
         bool mark = false;
-        for(int j=0;j*sizeof(fcb)<length;j++){
-            memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
-            string str  = temp.filename;
-            if(i==v.size()-1 && temp.attribute==0)continue;
-            if(i<v.size()-1 && temp.attribute==1)continue;
-            if(temp.attribute==1){
-                if(strlen(temp.exname)!=0){
-                    str+='.';
-                    str+=(string)temp.exname;
+        if(v[i]=="."){
+            if(i!=v.size()-1)
+                continue;
+            else{
+                mark=1;
+            }
+        }
+        else{
+            for(int j=0;j*sizeof(fcb)<length;j++){
+                memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
+                string str  = temp.filename;
+                if(i==v.size()-1 && (int)temp.attribute==0)continue;
+                if(i<v.size()-1 && (int)temp.attribute==1)continue;
+                if((int)temp.attribute==1){
+                    if(strlen(temp.exname)!=0){
+                        str+='.';
+                        str+=(string)temp.exname;
+                    }
                 }
-            }
-            if(v[i]==".")continue;
-            if(v[i]==".."){
-                if(second_fcb.first == curdir)
+                if(v[i]==".."){
+                    if(second_fcb.first == fd){
+                        break;
+                    }
+                    fd = second_fcb.first;
+                    checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
+                    name.pop_back();
+                    mark=true;
                     break;
-                fd = second_fcb.first;
-                checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
-                mark = true;
-                name.pop_back();
-                break;
-            }
-            else if(str==v[i]){
-                if(temp.attribute==1){
-                    cout<<"failed!  file already exist"<<endl;
-                    return -1;
+                }
+                else if(str==v[i]){
+                    if((int)temp.attribute==1){
+                        cout<<"failed!  file already exist"<<endl;
+                        return -1;
+                    }
+                    else {
+                        fd = temp.first;
+                        checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
+                        mark = true;
+                        name.push_back(str);
+                        break;
+                    }
                 }
             }
         }
@@ -848,8 +974,10 @@ void my_rm(char *filename){
     int mode;
     unsigned short fd;
     vector<string>v,name,he;// he存的是各个文件, v存的是当前操作的文件的各级目录
-    if(filename[0]=='\"' && filename[strlen(filename)-1]=='\"'){
+    if(filename[0]=='\"' && filename[strlen(filename)-1]=='\"' || filename[0]=='\'' && filename[strlen(filename)-1]=='\''){
         v.push_back(((string)filename).substr(1,strlen(filename)-2));
+        filename = (char*)v[0].c_str();
+        v = splitFilePath(filename,mode);
     }
     else{
         string tempstr = filename;
@@ -892,56 +1020,88 @@ void my_rm(char *filename){
     checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
     for(int i=0;i<v.size();i++){
         int mark = 0;
-        for(int j=0;j*sizeof(fcb)<length;j++){
-            memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
-            string str  = temp.filename;
-            if(i==v.size()-1 && temp.attribute==0)continue;
-            if(i<v.size()-1 && temp.attribute==1)continue;
-            if(temp.attribute==1){
-                if(strlen(temp.exname)!=0){
-                    str+='.';
-                    str+=(string)temp.exname;
-                }
+        if(v[i]=="."){
+            if(i!=v.size()-1)
+                continue;
+            else{
+                mark=1;
             }
-            if(v[i]==".")continue;
-            if(v[i]==".."){
-                if(second_fcb.first == curdir){
-                    mark = -1;
+        }
+        else{
+            for(int j=0;j*sizeof(fcb)<length;j++){
+                memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
+                string str  = temp.filename;
+                if(i==v.size()-1 && (int)temp.attribute==0)continue;
+                if(i<v.size()-1 && (int)temp.attribute==1)continue;
+                if((int)temp.attribute==1){
+                    if(strlen(temp.exname)!=0){
+                        str+='.';
+                        str+=(string)temp.exname;
+                    }
+                }
+                if(v[i]==".."){
+                    if(second_fcb.first == fd){
+                        break;
+                    }
+                    fd = second_fcb.first;
+                    checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
+                    name.pop_back();
+                    mark=1;
                     break;
                 }
-                fd = second_fcb.first;
-                checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
-                mark = 1;
-                name.pop_back();
-                break;
-            }
-            else if(str==v[i]){
-                if(temp.attribute==1){
-                    mark = 1;
-                    break;
+                else if(str==v[i]){
+                    if((int)temp.attribute==1){
+                        mark = 1;
+                        break;
+                    }
+                    else{
+                        fd = temp.first;
+                        checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
+                        mark = 1;
+                        name.push_back(str);
+                        break;
+                    }
                 }
             }
         }
-        if(mark==-1){
-            cout<<"Path error"<<endl;
-        }
-        else if(mark==0 && i==v.size()-1){
-            cout<<"File doesn't exist"<<endl;
+        if(mark==0){
+            if(i==v.size()-1)
+                cout<<"File doesn't exist"<<endl;
+            else{
+                cout<<"Path error"<<endl;
+            }
         }
         else if(mark==1 && i==v.size()-1){
+            int ha = -1;
+            for(int kk=0;kk<MAXOPENFILE;kk++){
+                useropen &cn = openfiles[kk];
+                string str=cn.file_fcb.filename;
+                if(strlen(cn.file_fcb.exname)!=0){
+                    str+=".";
+                    str+=cn.file_fcb.exname;
+                }
+                if(str==v[i]){
+                    cn.topenfile=0;
+                    curfileorder=-1;
+                }
+                if(cn.topenfile==1 && ha==-1)ha=kk;
+            }
+            if(curfileorder == -1)
+                curfileorder = ha;
             unsigned a = temp.first, b = a;
             while(1){
                 if(Fat1[a].id==END){
                     Fat1[a].id = FREE;
                     break;
                 }
+                a=Fat1[a].id;
                 Fat1[b].id=FREE;
                 b=a;
             }
             delDiritem(fd,v[i],1);
         }
     }
-    free(tempblock);
+    if(tempblock!=NULL)free(tempblock);
 }
 
 int my_read(int index,int len,unsigned int offset){
@@ -951,10 +1111,10 @@ int my_read(int index,int len,unsigned int offset){
     }
     string s="";
     useropen &cn = openfiles[index];
+    curfileorder = index;
     if(offset>=cn.file_fcb.length)return 0;
     if(len==0)len=cn.file_fcb.length;
     len = min((int)cn.file_fcb.length-(int)offset,len);
-    cn.count=offset;
     //读入
     int mode;
     unsigned short fd ,fd2;
@@ -963,7 +1123,6 @@ int my_read(int index,int len,unsigned int offset){
     char outstr[SIZE];
     unsigned int length,myoff=0;
     length = cn.file_fcb.length;
-    cout<<"len: "<<length<<endl;
     fd = cn.file_fcb.first;
     fd2 = fd;
     tempblock = (unsigned char *)malloc(SIZE);
@@ -977,8 +1136,6 @@ int my_read(int index,int len,unsigned int offset){
     memcpy(outstr,tempblock+offset,len);
     outstr[len]='\0';
     cout<<outstr<<endl;
-    curfileorder = index;
-    cn.count=offset+len;
     free(tempblock);    
     return 0;
 }
@@ -994,14 +1151,14 @@ void my_ls(){
     for(unsigned i=2;i*sizeof(fcb)<length;i++){
         memcpy(&curdiritem,tempblock+i*sizeof(fcb),sizeof(fcb));
         string name="";
-        if(curdiritem.attribute==0){
+        if((int)curdiritem.attribute==0){
             name=curdiritem.filename;
         }
         else{
-            name+=curdiritem.filename;
+            name=curdiritem.filename;
             if(strlen(curdiritem.exname)!=0){
-                name+='.';
-                name+=curdiritem.exname;
+                name+=".";
+                name+=(string)curdiritem.exname;
             }
         } 
         for(int j=0;j<name.size();j++){
@@ -1010,7 +1167,10 @@ void my_ls(){
                 break;
             }
         }
-        cout<<name<<"   ";
+        if((int)curdiritem.attribute==0){
+            cout<<BOLDGREEN<<name<<RESET<<"   ";
+        }
+        else cout<<name<<"   ";
         empty = false;
         sp++;
         if(sp!=0 && sp%8==0){
@@ -1026,7 +1186,7 @@ void my_ls(){
 void my_exitsys(){
     memcpy(blockaddr[0],&bootdisk,sizeof(bootdisk));
     memcpy(blockaddr[1],Fat1,2*BLOCKNUM);
-    memcpy(blockaddr[3],Fat2,2*BLOCKNUM);
+    memcpy(blockaddr[1+fatnum],Fat2,2*BLOCKNUM);
     FILE *fp = fopen("ZL_filesys", "wb");
     fwrite(myvhard, BLOCKSIZE, BLOCKNUM, fp);
     free(myvhard);
@@ -1042,6 +1202,14 @@ void my_close(int fd){
         cn.topenfile = 0;
         cout<<"Close Successfully"<<endl;
     }
+    curfileorder = -1;
+    for(int kk=0;kk<MAXOPENFILE;kk++){
+        useropen &cn = openfiles[kk];
+        if(cn.topenfile==1){
+            curfileorder=kk;
+            return ;
+        }
+    }
 }
 
 void show_openfile(){
@@ -1055,17 +1223,12 @@ void show_openfile(){
         useropen &cn = openfiles[i];
         if(cn.topenfile==1){
             string s=cn.file_fcb.filename;
-            if(cn.file_fcb.attribute==0){
-                if(strlen(cn.file_fcb.exname)!=0){
-                    s+=".";
-                    s+=cn.file_fcb.exname;
-                }
-                cout<<"directory: ";
+            if(strlen(cn.file_fcb.exname)!=0){
+                s+=".";
+                s+=cn.file_fcb.exname;
             }
-            else{
-                cout<<"date file: ";
-            }
-            cout<<s<<endl;
+            cout<<"data file: ";
+            cout<<cn.dir<<"/"<<s<<"   length:"<<cn.file_fcb.length<<endl;
         }
     }
 }
@@ -1114,26 +1277,35 @@ void my_cd(char *dirname){
     for(int i=0;i<v.size();i++){
         fcb temp;
         bool mark = false;
-        for(int j=0;j*sizeof(fcb)<length;j++){
-            memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
-            string str  = temp.filename;
-            if(temp.attribute == 1)continue;
-            if(v[i]==".")continue;
-            if(v[i]==".."){
-                if(second_fcb.first == curdir)
-                    break;
-                fd = second_fcb.first;
-                checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
-                mark = true;
-                name.pop_back();
-                break;
+        if(v[i]=="."){
+            if(i!=v.size()-1)
+                continue;
+            else{
+                mark=1;
             }
-            else if(str==v[i]){
-                fd = temp.first;
-                checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
-                mark = true;
-                name.push_back(v[i]);
-                break;
+        }
+        else{
+            for(int j=0;j*sizeof(fcb)<length;j++){
+                memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
+                string str  = temp.filename;
+                if((int)temp.attribute == 1)continue;
+                if(v[i]==".."){
+                    if(second_fcb.first == fd){
+                        break;
+                    }
+                    fd = second_fcb.first;
+                    checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
+                    name.pop_back();
+                    mark=true;
+                    break;
+                }
+                else if(str==v[i]){
+                    fd = temp.first;
+                    checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
+                    mark = true;
+                    name.push_back(v[i]);
+                    break;
+                }
             }
         }
         if(!mark)break;
@@ -1163,37 +1335,98 @@ void my_cd(char *dirname){
 
 void my_mkdir(char *dirname){
     int mode;
-    vector<string>v;
-    if(dirname[0]=='\"' && dirname[strlen(dirname)-1]=='\"'){
+    unsigned short fd;
+    vector<string>v,he,name;
+    if(dirname[0]=='\"' && dirname[strlen(dirname)-1]=='\"' || dirname[0]=='\'' && dirname[strlen(dirname)-1]=='\''){
         v.push_back(((string)dirname).substr(1,strlen(dirname)-2));
+        dirname = (char*)v[0].c_str();
+        v = splitFilePath(dirname,mode);
     }
     else{
-        v = splitFilePath(dirname,mode," ");
-        for(int i=0;i<v.size();i++){
-            if(v[i][0]=='/')v[i]=v[i].substr(1);
+        string tempstr = dirname;
+        he = splitFilePath(dirname,mode," ");
+        if(he.size()==0){
+            cout<<"wrong"<<endl;
+            return ;
+        }
+        else if(he.size()==1){
+            v = splitFilePath((char*)tempstr.c_str(),mode);
+        }
+        else{
+            for(int i=0;i<he.size();i++){
+                my_mkdir((char*)he[i].c_str());
+            }
+            return ;
+        }
+            
+    }
+    name.push_back("~");
+    if(mode==1){
+        fd = curdir;
+        char tempchar[DIRNUM];
+        int index = strlen(currentdir);
+        tempchar[0]='\"';
+        strcpy(tempchar+1,currentdir);
+        tempchar[index+1]='\"';
+        tempchar[index+2]='\0';
+        vector<string> hah = splitFilePath(tempchar,mode);
+        for(int i=0;i<hah.size();i++){
+            name.push_back(hah[i]);
         }
     }
-    fcb first_fcb,second_fcb;
+    else{
+        fd = bootdisk.root;
+    }
+    fcb first_fcb,second_fcb,temp;
     unsigned char* tempblock;
     unsigned int length;
-    unsigned short fd = curdir;
+    fd = curdir;
     checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
     for(int i=0;i<v.size();i++){
-        fcb temp;
-        bool mark = true;
-        for(int j=0;j*sizeof(fcb)<(int)length;j++){
-            memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
-            if(temp.attribute == 1)continue;
-            string str = temp.filename;
-            if(str=="." || str=="..")continue;
-            if(str==v[i]){
-                cout<<"Dirname: "<<v[i]<<" exists"<<endl;
-                mark = false;
-                break;
+        bool mark = false;
+        if(v[i]=="."){
+            if(i!=v.size()-1)
+                continue;
+            else{
+                mark=1;
             }
         }
-        //所需要创建文件目录不存在时
-        if(mark){
+        else{
+            for(int j=0;j*sizeof(fcb)<length;j++){
+                memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
+                string str  = temp.filename;
+                if((int)temp.attribute==1)continue;
+                if(v[i]==".."){
+                    if(second_fcb.first == fd){
+                        break;
+                    }
+                    fd = second_fcb.first;
+                    checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
+                    name.pop_back();
+                    mark=true;
+                    break;
+                }
+                if(str==v[i]){
+                    if(i==v.size()-1){
+                        cout<<"failed!  Directory exists"<<endl;
+                        return ;
+                    }
+                    else{
+                        fd = temp.first;
+                        checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
+                        mark = true;
+                        name.push_back(str);
+                        break;
+                    }
+                }
+            }
+        }
+        if(mark)continue;
+        if(i<v.size()-1){
+            cout<<"Path error"<<endl;
+            return ;
+        }
+        if(i==v.size()-1){
             addDiritem(fd,v[i],0);
         }
     }
@@ -1202,35 +1435,87 @@ void my_mkdir(char *dirname){
 
 void my_rmdir(char *dirname){
     int mode;
-    vector<string>v;
-    if(dirname[0]=='\"' && dirname[strlen(dirname)-1]=='\"'){
+    unsigned short fd;
+    vector<string>v,he,name;
+    if(dirname[0]=='\"' && dirname[strlen(dirname)-1]=='\"' || dirname[0]=='\'' && dirname[strlen(dirname)-1]=='\''){
         v.push_back(((string)dirname).substr(1,strlen(dirname)-2));
+        dirname = (char*)v[0].c_str();
+        v = splitFilePath(dirname,mode);
     }
     else{
-        v = splitFilePath(dirname,mode," ");
-        for(int i=0;i<v.size();i++){
-            if(v[i][0]=='/')v[i]=v[i].substr(1);
+        string tempstr = dirname;
+        he = splitFilePath(dirname,mode," ");
+        if(he.size()==0){
+            cout<<"wrong"<<endl;
+            return ;
+        }
+        else if(he.size()==1){
+            v = splitFilePath((char*)tempstr.c_str(),mode);
+        }
+        else{
+            for(int i=0;i<he.size();i++){
+                my_rmdir((char*)he[i].c_str());
+            }
+            return;
         }
     }
+    name.push_back("~");
+    if(mode==1){
+        fd = curdir;
+        char tempchar[DIRNUM];
+        int index = strlen(currentdir);
+        tempchar[0]='\"';
+        strcpy(tempchar+1,currentdir);
+        tempchar[index+1]='\"';
+        tempchar[index+2]='\0';
+        vector<string> hah = splitFilePath(tempchar,mode);
+        for(int i=0;i<hah.size();i++){
+            name.push_back(hah[i]);
+        }
+    }
+    else{
+        fd = bootdisk.root;
+    }
     fcb first_fcb,second_fcb;
+    fcb temp;
     unsigned char* tempblock;
     unsigned int length;
-    unsigned short fd = curdir , cn = fd;
     checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
     for(int i=0;i<v.size();i++){
-        fcb temp;
-        bool mark = false;
-        int j; //j记录着删除的位置
-        for(j=0;j*sizeof(fcb)<(int)length;j++){
-            memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
-            if(temp.attribute == 1)continue;
-            string str = temp.filename;
-            if(str=="." || str=="..")continue;
-            if(str==v[i]){
-                checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);   
-                mark = true;
-                break;
+        int mark = 0;
+        if(v[i]=="."){
+            if(i!=v.size()-1)
+                continue;
+            else{
+                mark=1;
             }
+        }
+        else{
+            for(int j=0;j*sizeof(fcb)<length;j++){
+                memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
+                string str  = temp.filename;
+                if((int)temp.attribute==1)continue;
+                if(v[i]==".."){
+                    if(second_fcb.first == fd){
+                        break;
+                    }
+                    fd = second_fcb.first;
+                    checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
+                    name.pop_back();
+                    mark=1;
+                    break;
+                }
+                if(str==v[i]){
+                    mark=1;
+                    if(i!=v.size()-1){
+                        fd = temp.first;
+                        checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);
+                        mark = 1;
+                        name.push_back(str);    
+                    }
+                    break;
+                }
+            }   
         }
         if(!mark){
             cout<<"Dirname: "<<v[i]<<" does not exist"<<endl;
@@ -1254,8 +1539,8 @@ void my_cname(unsigned short fd,char *oldname,char *newname,int type){
     for(j=0;j*sizeof(fcb)<(int)length;j++){
         memcpy(&temp,tempblock+j*sizeof(fcb),sizeof(fcb));
         string str = temp.filename;
-        if(temp.attribute!=type)continue;
-        if(temp.attribute==1){
+        if((int)temp.attribute!=type)continue;
+        if((int)temp.attribute==1){
             if(strlen(temp.exname)!=0){
                 str+='.';
                 str+=temp.exname;
@@ -1311,9 +1596,11 @@ void my_cname(unsigned short fd,char *oldname,char *newname,int type){
     else{
         pre = BLOCKSIZE-offset;
         left = sizeof(fcb)-pre;
-        memcpy(blockaddr[cn]+offset,&temp,pre);
+        unsigned char* save = (unsigned char*)malloc(sizeof(fcb));
+        memcpy(save,&temp,sizeof(fcb));
+        memcpy(blockaddr[cn]+offset,save,pre);
         cn = Fat1[cn].id;
-        memcpy(blockaddr[cn],&temp+pre,left);
+        memcpy(blockaddr[cn],save+pre,left);
     }    
 }
 

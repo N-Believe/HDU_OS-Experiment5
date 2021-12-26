@@ -32,7 +32,7 @@ using namespace std;
 #define BOLDWHITE   "\033[1m\033[37m"  
 
 
-#define BLOCKSIZE 64    //磁盘块大小
+#define BLOCKSIZE 40    //磁盘块大小
 #define END 65535       //FAT中的文件结束标志
 #define FREE 0          //FAT中盘块空闲标志
 #define MAXOPENFILE 10  //最多同时打开文件个数
@@ -732,7 +732,7 @@ int my_write(int index,unsigned int offset,int type){
     unsigned char* tempblock;
     unsigned int length,templen,need=0,beginLen;
     checkDir(&tempblock,fd,length,&first_fcb,&second_fcb);    
-    beginLen = (length+BLOCKSIZE-1)/BLOCKSIZE;
+    
     int i;
     for(i=2;i*sizeof(fcb)<length;i++){
         memcpy(&temp,tempblock+i*sizeof(fcb),sizeof(fcb));
@@ -747,6 +747,7 @@ int my_write(int index,unsigned int offset,int type){
         fd=Fat1[fd].id;
     }   
     offset=min((unsigned int)offset,temp.length); 
+    beginLen = (temp.length+BLOCKSIZE-1)/BLOCKSIZE*BLOCKSIZE;
     if(type==0){
         temp.length = min(temp.length,offset);
         templen = temp.length;
@@ -775,8 +776,9 @@ int my_write(int index,unsigned int offset,int type){
     }
     //写入
     fd = cn.file_fcb.first;
-    if(beginLen<temp.length || beginLen-temp.length<s.size()){
-        int num = (int)(beginLen-temp.length+BLOCKSIZE-1)/BLOCKSIZE;
+    if(beginLen<temp.length){
+        int num=1;
+        num = (int)(temp.length-beginLen+BLOCKSIZE-1)/BLOCKSIZE;
         vector<unsigned short>blocka = findfree(num);
         if(blocka.size()<num){
             cout<<"Insufficient memory, write failed"<<endl;
